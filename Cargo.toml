@@ -1,0 +1,25 @@
+[package]
+name = "ha-auth"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive", "env"] }
+keyring = { version = "3.6", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
+rand = "0.9"
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+time = { version = "0.3", features = ["serde", "formatting"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+url = "2"
+webbrowser = "1"
+
+[[bin]]
+name = "ha-auth"
+path = "src/main.rs"
