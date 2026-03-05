@@ -57,16 +57,26 @@ pub fn login_with_pkce() -> Result<(), HaAuthError> {
         webbrowser::open(auth_url.as_str())
             .map_err(|e| HaAuthError::Internal(format!("unable to open browser: {e}")))?;
 
-        let code = tokio::select! {
-            res = callback_server.wait_for_code() => res?,
+        let code_result = tokio::select! {
+            res = callback_server.wait_for_code() => res,
             _ = tokio::signal::ctrl_c() => {
                 callback_server.shutdown().await;
                 return Err(HaAuthError::Internal("login cancelled".to_string()));
             }
         };
 
+        let code = match code_result {
+            Ok(code) => code,
+            Err(err) => {
+                callback_server.shutdown().await;
+                return Err(err);
+            }
+        };
+
         let token_response =
-            http::exchange_code_for_tokens(&settings, &redirect_uri, &code, &code_verifier).await?;
+            http::exchange_code_for_tokens(&settings, &redirect_uri, &code, &code_verifier).await;
+        callback_server.shutdown().await;
+        let token_response = token_response?;
 
         if let Some(refresh_token) = token_response.refresh_token.as_deref() {
             secret::store_refresh_token(&settings, refresh_token)?;
