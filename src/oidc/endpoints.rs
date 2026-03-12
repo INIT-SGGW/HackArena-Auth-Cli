@@ -65,7 +65,7 @@ fn build_endpoint(settings: &Settings, leaf: &str) -> Result<Url, HaAuthError> {
 #[cfg(test)]
 mod tests {
     use super::build_endpoint;
-    use crate::config::{RedirectConfig, Settings};
+    use crate::config::{RedirectConfig, SecretBackend, Settings};
 
     fn settings(base_url: &str) -> Settings {
         Settings {
@@ -74,6 +74,8 @@ mod tests {
             client_id: "hackarena-auth-cli".to_string(),
             scopes: vec!["openid".to_string()],
             redirect: RedirectConfig::default(),
+            secret_backend: SecretBackend::Auto,
+            secret_file: None,
         }
     }
 

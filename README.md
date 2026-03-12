@@ -44,15 +44,33 @@ Optional env overrides (advanced):
 - `HA_AUTH_REDIRECT_PORT_START` (default `3000`)
 - `HA_AUTH_REDIRECT_PORT_END` (default `3999`)
 - `HA_AUTH_REDIRECT_PATH` (default `/callback`)
+- `HA_AUTH_SECRET_BACKEND` (`auto`, `keyring`, `file`; default: Windows/macOS `auto`, Linux `file`)
+- `HA_AUTH_SECRET_FILE` (absolute path override for file backend storage)
 
 ## Developers
 
-- Build release binary: `cargo build --release`
+- Build local binary: `cargo build --release`
 - Run tests: `cargo test`
+
+## Release (organizers)
+
+- Build artifacts per platform/arch:
+  - Windows x64: `cargo build --release --target x86_64-pc-windows-msvc`
+  - Windows ARM64: `cargo build --release --target aarch64-pc-windows-msvc`
+  - macOS ARM64: `cargo build --release --target aarch64-apple-darwin`
+  - macOS x64: `cargo build --release --target x86_64-apple-darwin`
+  - Linux x64 (portable musl): `cargo build --release --target x86_64-unknown-linux-musl`
+  - Linux ARM64 (portable musl): `cargo build --release --target aarch64-unknown-linux-musl`
 
 ## Production notes
 
 - Refresh tokens are namespaced in keyring by `base_url + realm + client_id`, so environments do not overwrite each other.
+- In `auto` mode, `ha-auth` uses keyring first and falls back to file storage when secure storage is unavailable.
+- On Linux builds, keyring backend is not included; use `file` or `auto` (which resolves to file).
+- File fallback location defaults:
+  - Windows: `%LOCALAPPDATA%/HackArena/auth/refresh-<namespace>.json`
+  - macOS: `~/Library/Application Support/ha-auth/refresh-<namespace>.json`
+  - Linux: `$XDG_STATE_HOME/ha-auth/refresh-<namespace>.json` (or `~/.local/state/ha-auth/...`)
 - Legacy keyring entries from older versions are migrated automatically on first use.
 - `base_url` is normalized and validated (requires host, no query/fragment/credentials) to keep endpoint behavior stable.
 - `whoami` decodes JWT claims for convenience and does not verify token signature.

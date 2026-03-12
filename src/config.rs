@@ -1,5 +1,6 @@
 //! Configuration loading and validation.
 
+use std::path::PathBuf;
 use std::sync::Once;
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,30 @@ impl Profile {
     }
 }
 
+/// Refresh token storage backend selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretBackend {
+    Auto,
+    Keyring,
+    File,
+}
+
+impl SecretBackend {
+    pub fn parse(raw: &str) -> Option<Self> {
+        if raw.eq_ignore_ascii_case("auto") {
+            return Some(SecretBackend::Auto);
+        }
+        if raw.eq_ignore_ascii_case("keyring") {
+            return Some(SecretBackend::Keyring);
+        }
+        if raw.eq_ignore_ascii_case("file") {
+            return Some(SecretBackend::File);
+        }
+        None
+    }
+}
+
 /// Redirect/callback server settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedirectConfig {
@@ -70,6 +95,12 @@ pub struct Settings {
     /// Redirect configuration for the temporary localhost callback server.
     #[serde(default)]
     pub redirect: RedirectConfig,
+    /// Refresh token backend (`auto`, `keyring`, `file`).
+    #[serde(default = "default_secret_backend")]
+    pub secret_backend: SecretBackend,
+    /// Optional explicit path override for file backend storage.
+    #[serde(default)]
+    pub secret_file: Option<PathBuf>,
 }
 
 impl Default for RedirectConfig {
@@ -96,6 +127,8 @@ impl Settings {
     /// - `HA_AUTH_REDIRECT_PORT_START`
     /// - `HA_AUTH_REDIRECT_PORT_END`
     /// - `HA_AUTH_REDIRECT_PATH`
+    /// - `HA_AUTH_SECRET_BACKEND` (`auto`, `keyring`, `file`)
+    /// - `HA_AUTH_SECRET_FILE` (absolute path override for file backend storage)
     /// - `HA_AUTH_PREPROD_URL`
     /// - `HA_AUTH_PREPROD_REALM`
     /// - `HA_AUTH_PREPROD_CLIENT_ID`
@@ -135,6 +168,21 @@ impl Settings {
         }
         if let Ok(value) = std::env::var("HA_AUTH_REDIRECT_PATH") {
             settings.redirect.path = value;
+        }
+        if let Ok(value) = std::env::var("HA_AUTH_SECRET_BACKEND") {
+            settings.secret_backend = SecretBackend::parse(value.as_str()).ok_or_else(|| {
+                HaAuthError::Internal(format!(
+                    "invalid HA_AUTH_SECRET_BACKEND '{value}', expected 'auto', 'keyring', or 'file'"
+                ))
+            })?;
+        }
+        if let Ok(value) = std::env::var("HA_AUTH_SECRET_FILE") {
+            if value.trim().is_empty() {
+                return Err(HaAuthError::Internal(
+                    "invalid HA_AUTH_SECRET_FILE: value must not be empty".to_string(),
+                ));
+            }
+            settings.secret_file = Some(PathBuf::from(value));
         }
 
         settings.base_url = normalize_base_url(&settings.base_url)?;
@@ -190,6 +238,8 @@ fn defaults_for_profile(profile: Profile) -> Settings {
         client_id,
         scopes: default_scopes(),
         redirect: RedirectConfig::default(),
+        secret_backend: default_secret_backend(),
+        secret_file: None,
     }
 }
 
@@ -216,6 +266,17 @@ fn default_scopes() -> Vec<String> {
         "email".to_string(),
         "offline_access".to_string(),
     ]
+}
+
+fn default_secret_backend() -> SecretBackend {
+    #[cfg(target_os = "linux")]
+    {
+        SecretBackend::File
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        SecretBackend::Auto
+    }
 }
 
 fn validate(settings: &Settings) -> Result<(), HaAuthError> {
@@ -286,7 +347,7 @@ fn normalize_base_url(raw: &str) -> Result<String, HaAuthError> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_base_url;
+    use super::{SecretBackend, normalize_base_url};
 
     #[test]
     fn normalize_base_url_unifies_trailing_slash() {
@@ -302,5 +363,22 @@ mod tests {
         assert!(with_query.is_err());
         let with_fragment = normalize_base_url("https://auth.example.com/base#frag");
         assert!(with_fragment.is_err());
+    }
+
+    #[test]
+    fn secret_backend_parse_accepts_supported_values() {
+        assert_eq!(SecretBackend::parse("auto"), Some(SecretBackend::Auto));
+        assert_eq!(
+            SecretBackend::parse("keyring"),
+            Some(SecretBackend::Keyring)
+        );
+        assert_eq!(SecretBackend::parse("file"), Some(SecretBackend::File));
+        assert_eq!(SecretBackend::parse("AUTO"), Some(SecretBackend::Auto));
+    }
+
+    #[test]
+    fn secret_backend_parse_rejects_unknown_values() {
+        assert_eq!(SecretBackend::parse(""), None);
+        assert_eq!(SecretBackend::parse("unknown"), None);
     }
 }

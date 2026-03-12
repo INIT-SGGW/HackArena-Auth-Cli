@@ -8,7 +8,14 @@ use ha_auth::error::{ExitCode, HaAuthError};
     name = "ha-auth",
     version,
     about = "HackArena Auth CLI",
-    long_about = "HackArena Auth CLI\nPurpose: Authentication helper for HackArena tools.\n\nRuntime profile: default is official. Set HA_AUTH_PROFILE=preprod for organizer testing.\nFor full environment override list, see README."
+    long_about = concat!(
+        "HackArena Auth CLI\n",
+        "Purpose: Authentication helper for HackArena tools.\n\n",
+        "Runtime profile: default is official. ",
+        "Set HA_AUTH_PROFILE=preprod for organizer testing.\n",
+        "Secret storage: default is auto on Windows/macOS and file on Linux.\n",
+        "For full environment override list, see README."
+    )
 )]
 struct Args {
     /// Suppress informational stderr logs.
