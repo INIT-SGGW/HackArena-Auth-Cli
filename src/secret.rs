@@ -1,11 +1,13 @@
 //! Refresh token storage with automatic keyring -> file fallback.
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::sync::Once;
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use crate::output;
 use crate::{
     config::{SecretBackend, Settings},
     error::HaAuthError,
-    output,
 };
 
 mod file_backend;
