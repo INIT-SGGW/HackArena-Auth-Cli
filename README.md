@@ -60,13 +60,12 @@ No-browser login:
 
 ## Release (organizers)
 
-- Build artifacts per platform/arch:
-  - Windows x64: `cargo build --release --target x86_64-pc-windows-msvc`
-  - Windows ARM64: `cargo build --release --target aarch64-pc-windows-msvc`
-  - macOS ARM64: `cargo build --release --target aarch64-apple-darwin`
-  - macOS x64: `cargo build --release --target x86_64-apple-darwin`
-  - Linux x64 (portable musl): `cargo build --release --target x86_64-unknown-linux-musl`
-  - Linux ARM64 (portable musl): `cargo build --release --target aarch64-unknown-linux-musl`
+- Windows x64: `./scripts/build-release-win-x64.ps1`
+- Windows ARM64: `./scripts/build-release-win-arm64.ps1`
+- Linux x64 (musl): `./scripts/build-release-linux-musl-x64.sh`
+- Linux ARM64 (musl): `./scripts/build-release-linux-musl-arm64.sh`
+- Checksums (PowerShell): `./scripts/write-sha256sums.ps1`
+- Checksums (shell): `./scripts/write-sha256sums.sh`
 
 ## Production notes
 
