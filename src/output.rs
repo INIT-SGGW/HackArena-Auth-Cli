@@ -18,6 +18,11 @@ pub fn print_text_line(value: &str) {
     println!("{value}");
 }
 
+/// Writes a single line to stderr regardless of quiet mode.
+pub fn print_stderr_line(value: &str) {
+    eprintln!("{value}");
+}
+
 /// Enables or disables informational stderr messages.
 pub fn set_quiet(quiet: bool) {
     QUIET.store(quiet, Ordering::Relaxed);

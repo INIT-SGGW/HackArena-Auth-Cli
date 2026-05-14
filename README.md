@@ -5,6 +5,7 @@ Standalone cross-platform Rust CLI for Keycloak OIDC authentication (Authorizati
 ## Quick Start
 
 - Run `ha-auth login` to authenticate in the browser.
+- Run `ha-auth login --no-browser` to authenticate without opening a local browser.
 - Use `ha-auth token` to print access token payload as JSON.
 
 ## Stable CLI contract (for integrations)
@@ -15,6 +16,7 @@ Standalone cross-platform Rust CLI for Keycloak OIDC authentication (Authorizati
 
 Success outputs:
 - `ha-auth login` -> `{"status":"ok"}`
+- `ha-auth login --no-browser` -> `{"status":"ok"}`
 - `ha-auth logout` -> `{"status":"ok"}`
 - `ha-auth token` -> `{"token":"...","expires_at":"..."}`
 - `ha-auth token --raw` -> `<access_token>`
@@ -46,6 +48,10 @@ Optional env overrides (advanced):
 - `HA_AUTH_REDIRECT_PATH` (default `/callback`)
 - `HA_AUTH_SECRET_BACKEND` (`auto`, `keyring`, `file`; default: Windows/macOS `auto`, Linux `file`)
 - `HA_AUTH_SECRET_FILE` (absolute path override for file backend storage)
+
+No-browser login:
+- `ha-auth login --no-browser` uses OAuth 2.0 Device Authorization Grant.
+- It prints verification instructions to `stderr` and still writes only `{"status":"ok"}` to `stdout` on success.
 
 ## Developers
 

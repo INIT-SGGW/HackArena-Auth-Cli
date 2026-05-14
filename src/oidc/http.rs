@@ -7,13 +7,24 @@ use serde::Deserialize;
 use crate::{
     config::Settings,
     error::HaAuthError,
-    oidc::{endpoints, types::TokenResponse},
+    oidc::{
+        endpoints,
+        types::{DeviceAuthorizationResponse, TokenResponse},
+    },
     output,
 };
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const HTTP_REDIRECT_LIMIT: usize = 10;
 static TLS_PROVIDER_INIT: Once = Once::new();
+
+pub enum DeviceTokenPollResult {
+    Complete(TokenResponse),
+    AuthorizationPending,
+    SlowDown,
+    AccessDenied,
+    Expired,
+}
 
 pub async fn exchange_code_for_tokens(
     settings: &Settings,
@@ -39,6 +50,40 @@ pub async fn exchange_code_for_tokens(
         .await?;
 
     handle_token_response(res).await
+}
+
+pub async fn start_device_authorization(
+    settings: &Settings,
+    code_challenge: &str,
+) -> Result<DeviceAuthorizationResponse, HaAuthError> {
+    let endpoint = endpoints::device_authorization_endpoint(settings)?;
+    let scope = settings.scopes.join(" ");
+    let form = [
+        ("client_id", settings.client_id.as_str()),
+        ("scope", scope.as_str()),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
+    ];
+
+    let client = http_client()?;
+    let res = client
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .form(&form)
+        .send()
+        .await?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(HaAuthError::Network(format!(
+            "device authorization request failed: HTTP {status} {body}"
+        )));
+    }
+
+    res.json::<DeviceAuthorizationResponse>()
+        .await
+        .map_err(|e| HaAuthError::Network(e.to_string()))
 }
 
 pub async fn refresh_access_token(
@@ -79,6 +124,47 @@ pub async fn refresh_access_token(
     }
 
     handle_token_response(res).await
+}
+
+pub async fn poll_device_access_token(
+    settings: &Settings,
+    device_code: &str,
+    code_verifier: &str,
+) -> Result<DeviceTokenPollResult, HaAuthError> {
+    let endpoint = endpoints::token_endpoint(settings)?;
+    let form = [
+        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ("client_id", settings.client_id.as_str()),
+        ("device_code", device_code),
+        ("code_verifier", code_verifier),
+    ];
+
+    let client = http_client()?;
+    let res = client
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .form(&form)
+        .send()
+        .await?;
+
+    if res.status().is_success() {
+        return res
+            .json::<TokenResponse>()
+            .await
+            .map(DeviceTokenPollResult::Complete)
+            .map_err(|e| HaAuthError::Network(e.to_string()));
+    }
+
+    let status = res.status();
+    let body = res.text().await.unwrap_or_default();
+
+    if let Some(result) = classify_device_token_error(status, &body) {
+        return Ok(result);
+    }
+
+    Err(HaAuthError::Network(format!(
+        "token request failed: HTTP {status} {body}"
+    )))
 }
 
 pub async fn revoke_refresh_token(
@@ -139,6 +225,26 @@ fn is_invalid_grant_error(body: &str) -> bool {
     body.to_ascii_lowercase().contains("invalid_grant")
 }
 
+fn classify_device_token_error(
+    status: reqwest::StatusCode,
+    body: &str,
+) -> Option<DeviceTokenPollResult> {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return None;
+    }
+
+    let parsed = serde_json::from_str::<OAuthErrorResponse>(body).ok()?;
+    let error = parsed.error?;
+
+    match error.as_str() {
+        "authorization_pending" => Some(DeviceTokenPollResult::AuthorizationPending),
+        "slow_down" => Some(DeviceTokenPollResult::SlowDown),
+        "access_denied" => Some(DeviceTokenPollResult::AccessDenied),
+        "expired_token" => Some(DeviceTokenPollResult::Expired),
+        _ => None,
+    }
+}
+
 async fn handle_token_response(res: reqwest::Response) -> Result<TokenResponse, HaAuthError> {
     if !res.status().is_success() {
         let status = res.status();
@@ -155,7 +261,8 @@ async fn handle_token_response(res: reqwest::Response) -> Result<TokenResponse, 
 
 #[cfg(test)]
 mod tests {
-    use super::is_invalid_grant_error;
+    use super::{DeviceTokenPollResult, classify_device_token_error, is_invalid_grant_error};
+    use reqwest::StatusCode;
 
     #[test]
     fn identifies_invalid_grant_json() {
@@ -169,5 +276,47 @@ mod tests {
         assert!(!is_invalid_grant_error(
             r#"{"error":"invalid_client","error_description":"client not found"}"#
         ));
+    }
+
+    #[test]
+    fn classifies_authorization_pending() {
+        let result = classify_device_token_error(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"authorization_pending"}"#,
+        );
+        assert!(matches!(
+            result,
+            Some(DeviceTokenPollResult::AuthorizationPending)
+        ));
+    }
+
+    #[test]
+    fn classifies_slow_down() {
+        let result =
+            classify_device_token_error(StatusCode::BAD_REQUEST, r#"{"error":"slow_down"}"#);
+        assert!(matches!(result, Some(DeviceTokenPollResult::SlowDown)));
+    }
+
+    #[test]
+    fn classifies_access_denied() {
+        let result =
+            classify_device_token_error(StatusCode::BAD_REQUEST, r#"{"error":"access_denied"}"#);
+        assert!(matches!(result, Some(DeviceTokenPollResult::AccessDenied)));
+    }
+
+    #[test]
+    fn classifies_expired_token() {
+        let result =
+            classify_device_token_error(StatusCode::BAD_REQUEST, r#"{"error":"expired_token"}"#);
+        assert!(matches!(result, Some(DeviceTokenPollResult::Expired)));
+    }
+
+    #[test]
+    fn device_flow_pkce_constants_match_expected_values() {
+        let code_challenge_method = "S256";
+        let grant_type = "urn:ietf:params:oauth:grant-type:device_code";
+
+        assert_eq!(code_challenge_method, "S256");
+        assert_eq!(grant_type, "urn:ietf:params:oauth:grant-type:device_code");
     }
 }

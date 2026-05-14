@@ -13,6 +13,7 @@ use ha_auth::error::{ExitCode, HaAuthError};
         "Purpose: Authentication helper for HackArena tools.\n\n",
         "Runtime profile: default is official. ",
         "Set HA_AUTH_PROFILE=preprod for organizer testing.\n",
+        "Use 'ha-auth login --no-browser' to authenticate without opening a local browser.\n",
         "Secret storage: default is auto on Windows/macOS and file on Linux.\n",
         "For full environment override list, see README."
     )

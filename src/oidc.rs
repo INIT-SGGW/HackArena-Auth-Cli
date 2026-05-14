@@ -5,14 +5,20 @@ mod http;
 mod pkce;
 mod types;
 
-use time::{Duration, OffsetDateTime};
+use std::time::Duration as StdDuration;
+
+use time::{Duration as TimeDuration, OffsetDateTime};
+use tokio::time::Instant;
 
 use crate::{callback, config::Settings, error::HaAuthError, lock::LockFile, output, secret};
 
 pub use types::{TokenOutput, WhoamiClaims};
 
-/// Performs an Authorization Code + PKCE login, storing the resulting refresh token.
-pub fn login_with_pkce() -> Result<(), HaAuthError> {
+const DEVICE_FLOW_DEFAULT_INTERVAL_SECS: u64 = 5;
+const DEVICE_FLOW_SLOW_DOWN_INCREMENT_SECS: u64 = 5;
+
+/// Performs a login, either via browser PKCE or no-browser device flow.
+pub fn login(no_browser: bool) -> Result<(), HaAuthError> {
     let settings = Settings::from_env_or_defaults()?;
     let _login_lock = LockFile::acquire("ha-auth-login")?;
 
@@ -43,8 +49,18 @@ pub fn login_with_pkce() -> Result<(), HaAuthError> {
         }
     }
 
+    if no_browser {
+        login_with_device_flow(&settings)
+    } else {
+        login_with_pkce(&settings)
+    }
+}
+
+/// Performs an Authorization Code + PKCE login, storing the resulting refresh token.
+fn login_with_pkce(settings: &Settings) -> Result<(), HaAuthError> {
     let (code_verifier, code_challenge) = pkce::generate_pkce_pair()?;
     let state = pkce::generate_state()?;
+    let settings = settings.clone();
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| HaAuthError::Internal(e.to_string()))?;
     rt.block_on(async move {
@@ -76,16 +92,68 @@ pub fn login_with_pkce() -> Result<(), HaAuthError> {
         let token_response =
             http::exchange_code_for_tokens(&settings, &redirect_uri, &code, &code_verifier).await;
         callback_server.shutdown().await;
-        let token_response = token_response?;
+        store_refresh_token_from_response(&settings, &token_response?)
+    })
+}
 
-        if let Some(refresh_token) = token_response.refresh_token.as_deref() {
-            secret::store_refresh_token(&settings, refresh_token)?;
-            Ok(())
+fn login_with_device_flow(settings: &Settings) -> Result<(), HaAuthError> {
+    let (code_verifier, code_challenge) = pkce::generate_pkce_pair()?;
+    let settings = settings.clone();
+    let rt = tokio::runtime::Runtime::new().map_err(|e| HaAuthError::Internal(e.to_string()))?;
+
+    rt.block_on(async move {
+        let device = http::start_device_authorization(&settings, &code_challenge).await?;
+
+        output::print_stderr_line("Browser login disabled. Complete authentication using:");
+        if let Some(url) = device.verification_uri_complete.as_deref() {
+            output::print_stderr_line(url);
         } else {
-            Err(HaAuthError::Internal(
-                "no refresh_token returned; ensure 'offline_access' scope is configured"
-                    .to_string(),
-            ))
+            output::print_stderr_line(&format!("Verification URL: {}", device.verification_uri));
+            output::print_stderr_line(&format!("User code: {}", device.user_code));
+        }
+        output::print_stderr_line("Waiting for authorization...");
+
+        let mut interval_secs = device
+            .interval
+            .unwrap_or(DEVICE_FLOW_DEFAULT_INTERVAL_SECS)
+            .max(1);
+        let deadline = Instant::now() + StdDuration::from_secs(device.expires_in.max(1));
+
+        loop {
+            let sleep = tokio::time::sleep(StdDuration::from_secs(interval_secs));
+            tokio::pin!(sleep);
+
+            tokio::select! {
+                _ = &mut sleep => {}
+                _ = tokio::signal::ctrl_c() => {
+                    return Err(HaAuthError::Internal("login cancelled".to_string()));
+                }
+            }
+
+            if Instant::now() >= deadline {
+                output::print_stderr_line("Device authorization expired. Run login again.");
+                return Err(HaAuthError::LoginRequired);
+            }
+
+            match http::poll_device_access_token(&settings, &device.device_code, &code_verifier)
+                .await?
+            {
+                http::DeviceTokenPollResult::Complete(token_response) => {
+                    return store_refresh_token_from_response(&settings, &token_response);
+                }
+                http::DeviceTokenPollResult::AuthorizationPending => {}
+                http::DeviceTokenPollResult::SlowDown => {
+                    interval_secs += DEVICE_FLOW_SLOW_DOWN_INCREMENT_SECS;
+                }
+                http::DeviceTokenPollResult::AccessDenied => {
+                    output::print_stderr_line("Device authorization was denied.");
+                    return Err(HaAuthError::LoginRequired);
+                }
+                http::DeviceTokenPollResult::Expired => {
+                    output::print_stderr_line("Device authorization expired. Run login again.");
+                    return Err(HaAuthError::LoginRequired);
+                }
+            }
         }
     })
 }
@@ -133,8 +201,22 @@ pub fn logout() -> Result<(), HaAuthError> {
 
 fn compute_expires_at(expires_in: u64) -> Result<OffsetDateTime, HaAuthError> {
     let now = OffsetDateTime::now_utc();
-    let dur = Duration::seconds(
+    let dur = TimeDuration::seconds(
         i64::try_from(expires_in).map_err(|e| HaAuthError::Internal(e.to_string()))?,
     );
     Ok(now + dur)
+}
+
+fn store_refresh_token_from_response(
+    settings: &Settings,
+    token_response: &types::TokenResponse,
+) -> Result<(), HaAuthError> {
+    if let Some(refresh_token) = token_response.refresh_token.as_deref() {
+        secret::store_refresh_token(settings, refresh_token)?;
+        Ok(())
+    } else {
+        Err(HaAuthError::Internal(
+            "no refresh_token returned; ensure 'offline_access' scope is configured".to_string(),
+        ))
+    }
 }

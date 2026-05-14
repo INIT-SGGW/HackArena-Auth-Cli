@@ -28,6 +28,17 @@ pub fn token_endpoint(settings: &Settings) -> Result<Url, HaAuthError> {
     build_endpoint(settings, "token")
 }
 
+pub fn device_authorization_endpoint(settings: &Settings) -> Result<Url, HaAuthError> {
+    let mut url = auth_endpoint(settings)?;
+    {
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| HaAuthError::Internal("base_url cannot be a base URL".to_string()))?;
+        path.push("device");
+    }
+    Ok(url)
+}
+
 pub fn revocation_endpoint(settings: &Settings) -> Result<Url, HaAuthError> {
     build_endpoint(settings, "revoke")
 }
@@ -64,7 +75,7 @@ fn build_endpoint(settings: &Settings, leaf: &str) -> Result<Url, HaAuthError> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_endpoint;
+    use super::{build_endpoint, device_authorization_endpoint};
     use crate::config::{RedirectConfig, SecretBackend, Settings};
 
     fn settings(base_url: &str) -> Settings {
@@ -96,6 +107,17 @@ mod tests {
         assert_eq!(
             token.as_str(),
             "https://auth.example.com/auth/realms/Init/protocol/openid-connect/token"
+        );
+    }
+
+    #[test]
+    fn builds_device_authorization_endpoint() {
+        let settings = settings("https://auth.example.com/auth/");
+        let endpoint =
+            device_authorization_endpoint(&settings).expect("device authorization endpoint");
+        assert_eq!(
+            endpoint.as_str(),
+            "https://auth.example.com/auth/realms/Init/protocol/openid-connect/auth/device"
         );
     }
 }
